@@ -7,6 +7,7 @@ import ext_pycparser
 import pycparser
 import recorder
 import utils
+import re
 
 def cpp(filename):
 	"""
@@ -23,30 +24,37 @@ def cpp(filename):
 	output = utils.preprocess_file(filename, cpp_path='mcpp', cpp_args=cpp_args)
 	return '\n'.join([x for x in output.split('\n') if not x.startswith("_Pragma(")])
 
-def analyzeInclude(filename, txt):
+def analyzeInclude(filename, txt, orig_txt):      
 	"""
-	Text -> [(Lineno, Text)]
+	Text -> (include_directives, Text)
 	"""
-	filename = os.path.abspath(filename)
-	current_result = None
-	result = [] # (header_lineno, [])
-	for line in txt.splitlines():
-		line = line.strip()
-		if not len(line):
-			continue
-
-		if line.startswith("#line"):
-			xs = line.split()
-			fn = xs[2].strip('"')
-			if fn == filename:
-				header_lineno = int(xs[1])
-				current_result = None
-			elif current_result == None:
-				current_result = []
-				result.append((header_lineno, current_result))
-		elif current_result != None:
-			current_result.append(line)
-	return result
+        current_result = None
+        include_statements = []
+        include_code = []
+        lineno = 0
+        orig_txt_lines = orig_txt.splitlines()
+    
+        for line in txt.splitlines():
+            if line.startswith("#line"):
+                xs = line.split()
+                fn = xs[2].strip('"')
+                fn = fn.replace('\\\\', '\\')
+                if fn == filename:
+                    lineno = int(xs[1])
+                    current_result = None
+                elif current_result == None:
+                    current_result = []
+                    # search for matching include statement
+                    for inc_no in range(lineno-1, len(orig_txt_lines)):
+                        if re.match('#include.*' + os.path.basename(fn), orig_txt_lines[inc_no]):
+                            include_statements.append(orig_txt_lines[inc_no])
+                    include_code.append(current_result)
+            else:
+                if current_result == None:
+                    lineno += 1
+                else:
+                    current_result.append(line)
+        return (include_statements, include_code)
 
 def compare_asts(ast1, ast2):
 	if type(ast1) != type(ast2):
@@ -139,20 +147,17 @@ class Apply:
 		recorder.t.file_record("preprocessed", cpped_txt)
 		# print(cpped_txt)
 
-		includes = analyzeInclude(filename, cpped_txt)
+                fp = open(filename)
+                orig_txt = fp.read()
+                fp.close()
+
+		(included_headers, included_code) = analyzeInclude(filename, cpped_txt, orig_txt)
+                included_codes=[];
+                for inc_code in included_code:
+                        included_codes('\n'.join(inc_code))
 
 		# print(includes)
 
-		fp = open(filename)
-		orig_txt_lines = fp.read().splitlines()
-		fp.close()
-		included_headers = []
-		included_codes = []
-		for lineno, code in	includes:
-			included_headers.append(orig_txt_lines[lineno - 1])
-			included_codes.append('\n'.join(code))
-		# print(included_codes)
-		# print(included_headers)	
 
 		ast_a = self.f(cpped_txt)
 
@@ -173,43 +178,43 @@ class Apply:
 
 if __name__ == "__main__":
 	testcase = r"""
-# 1 "main.c"
-# 1 "<command-line>"
-# 1 "main.c"
-# 1 "/usr/lib/gcc/x86_64-linux-gnu/4.7/include/stdarg.h" 1 3 4
-# 40 "/usr/lib/gcc/x86_64-linux-gnu/4.7/include/stdarg.h" 3 4
+#line 1 "main.c"
+#line 1 "<command-line>"
+#line 1 "main.c"
+#line 1 "/usr/lib/gcc/x86_64-linux-gnu/4.7/include/stdarg.h" 1 3 4
+#line 40 "/usr/lib/gcc/x86_64-linux-gnu/4.7/include/stdarg.h" 3 4
 typedef __builtin_va_list __gnuc_va_list;
-# 102 "/usr/lib/gcc/x86_64-linux-gnu/4.7/include/stdarg.h" 3 4
+#line 102 "/usr/lib/gcc/x86_64-linux-gnu/4.7/include/stdarg.h" 3 4
 typedef __gnuc_va_list va_list;
-# 2 "main.c" 2
-# 1 "a.h" 1
+#line 2 "main.c" 2
+#line 1 "a.h" 1
 
-# 1 "f/g.h" 1
+#line 1 "f/g.h" 1
 typedef long mylong;
-# 3 "a.h" 2
+#line 3 "a.h" 2
 struct T { int x; };
 
 struct U {
  int y;
   int z;
 };
-# 3 "main.c" 2
-# 1 "b.h" 1
-# 1 "c.h" 1
-# 2 "b.h" 2
-# 1 "d.h" 1
-# 1 "e.h" 1
-# 1 "d.h" 2
-# 3 "b.h" 2
-# 1 "f/g.h" 1
+#line 3 "main.c" 2
+#line 1 "b.h" 1
+#line 1 "c.h" 1
+#line 2 "b.h" 2
+#line 1 "d.h" 1
+#line 1 "e.h" 1
+#line 1 "d.h" 2
+#line 3 "b.h" 2
+#line 1 "f/g.h" 1
 typedef long mylong;
-# 3 "b.h" 2
-# 4 "main.c" 2
+#line 3 "b.h" 2
+#line 4 "main.c" 2
 
 
 int main(void) { return 0; }
 """	
-	analyzeInclude("main.c", testcase)
+	analyzeInclude("main.c", testcase, testcase)
 
 	a = r"""
 int x1;
